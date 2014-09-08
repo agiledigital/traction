@@ -7,4 +7,6 @@ case class ActivityScheduled(activityId: String) extends ActivityEvent
 case class ActivityStarted (activityId: String) extends ActivityEvent
 case class ActivitySucceeded (activityId: String, result: String) extends ActivityEvent
 case class ActivityFailed (activityId: String, reason: String) extends ActivityEvent
+case class ActivityTimedOut (activityId: String, reason: String) extends ActivityEvent
+case class ActivityStartFailed (activityId: String, reason: String) extends ActivityEvent
 

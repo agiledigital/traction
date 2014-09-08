@@ -7,13 +7,15 @@ sealed abstract class SwfEvent [T](val name: String, parse: HistoryEvent => T) {
 }
 
 object SwfEvents {
-  object WorkflowExecutionStarted extends SwfEvent("WorkflowExecutionStarted", _.getWorkflowExecutionStartedEventAttributes)
-  object DecisionTaskStarted      extends SwfEvent("DecisionTaskStarted",      _.getDecisionTaskStartedEventAttributes) 
-  object ActivityTaskScheduled    extends SwfEvent("ActivityTaskScheduled",    _.getActivityTaskScheduledEventAttributes) 
-  object ActivityTaskStarted      extends SwfEvent("ActivityTaskStarted",      _.getActivityTaskStartedEventAttributes) 
-  object ActivityTaskCompleted    extends SwfEvent("ActivityTaskCompleted",    _.getActivityTaskCompletedEventAttributes)
-  object ActivityTaskFailed       extends SwfEvent("ActivityTaskFailed",       _.getActivityTaskFailedEventAttributes)
+  object WorkflowExecutionStarted   extends SwfEvent("WorkflowExecutionStarted", _.getWorkflowExecutionStartedEventAttributes)
+  object DecisionTaskStarted        extends SwfEvent("DecisionTaskStarted",      _.getDecisionTaskStartedEventAttributes)
+  object ActivityTaskScheduled      extends SwfEvent("ActivityTaskScheduled",    _.getActivityTaskScheduledEventAttributes)
+  object ActivityTaskStarted        extends SwfEvent("ActivityTaskStarted",      _.getActivityTaskStartedEventAttributes)
+  object ActivityTaskCompleted      extends SwfEvent("ActivityTaskCompleted",    _.getActivityTaskCompletedEventAttributes)
+  object ActivityTaskFailed         extends SwfEvent("ActivityTaskFailed",       _.getActivityTaskFailedEventAttributes)
+  object ActivityTaskTimedOut       extends SwfEvent("ActivityTaskTimedOut",     _.getActivityTaskTimedOutEventAttributes)
+  object ScheduleActivityTaskFailed extends SwfEvent("ScheduleActivityTaskFailed", _.getScheduleActivityTaskFailedEventAttributes)
   
-  def all = List(WorkflowExecutionStarted, ActivityTaskScheduled, ActivityTaskScheduled, DecisionTaskStarted)
+  def all = List(WorkflowExecutionStarted, ActivityTaskScheduled, ActivityTaskScheduled, DecisionTaskStarted, ActivityTaskTimedOut, ScheduleActivityTaskFailed)
   def forName (name: String) = all find (_.name == name) 
 }

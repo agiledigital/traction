@@ -2,12 +2,12 @@ package com.gravitydev.traction
 
 import scala.language.implicitConversions
 import scala.language.experimental.macros
-import scala.reflect.macros.Context
+import scala.reflect.macros.whitebox.Context
 import scala.reflect.runtime.universe._
-import scalaz._, syntax.validation._
 
 package amazonswf {
-  private [amazonswf] case class SwfActivityData [A <: Activity[_,_]](val activity: A)(implicit val meta: SwfActivityMeta[_,A]) {
+
+private [amazonswf] case class SwfActivityData [A <: Activity[_,_]](val activity: A)(implicit val meta: SwfActivityMeta[_,A]) {
     lazy val id = meta.id(activity)
     lazy val input = meta.serializeActivity(activity)
 
@@ -22,7 +22,8 @@ package amazonswf {
 
   sealed trait ActivityState
   case object ActivityInProcess extends ActivityState
-  case class ActivityComplete (result: String \/ String) extends ActivityState
+  case class ActivityComplete (result: Either[String, String]) extends ActivityState
+  case class ActivityTimedOutState (reason: String, numberOfRetries: Int) extends ActivityState
 
 
   class ActivityStep [T, A <: Activity[_,T]] (
@@ -30,13 +31,23 @@ package amazonswf {
   )(implicit meta: SwfActivityMeta[T,A]) extends Step [T] {
 
     def decide (history: Map[String,ActivityState], onSuccess: T=>Decision, onFailure: String=>Decision): Decision = history.get(meta.id(activity)) map {
-      case ActivityComplete(res: \/[String,String]) => res fold (
+      case ActivityComplete(res: Either[String,String]) => res fold (
         error => onFailure(error), 
         result => onSuccess( meta.parseResult(result) )
       ) : Decision
-      case ActivityInProcess => carryOn 
+      case ActivityInProcess => carryOn
+      case ActivityTimedOutState(reason, numRetries) => {
+        if (meta.numberOfRetries >= numRetries) {
+          println(s"Activity [$activity] timed out due to [$reason] for the [$numRetries] time, rescheduling.")
+          ScheduleActivities( List(new SwfActivityData(activity)) ): Decision
+        }
+        else {
+          onFailure(s"Activity timed out [$numRetries] times, which is more than the allowable number of [${meta.numberOfRetries}].")
+        }
+      }
     } getOrElse ( ScheduleActivities( List(new SwfActivityData(activity)) ): Decision)
-    
+
+    override def toString = s"ActivityStep($meta})"
   }
 }
 
@@ -47,7 +58,7 @@ abstract class Check[T] {
 package object amazonswf extends System {
   type WorkflowHistory = Map[String,ActivityState]
   type ActivityMeta[A <: Activity[_,_]] = SwfActivityMeta[_,A]
-  type WorkflowMeta[T, W <: Workflow[T]] = SwfWorkflowMeta[T,W]
+  type WorkflowMeta[T, W <: Workflow[_, T]] = SwfWorkflowMeta[T,W]
 
   type Complete[T] = CompleteWorkflow[T]
   type CarryOn = WaitOnActivities.type
@@ -78,9 +89,9 @@ package object amazonswf extends System {
   }
  
   /** Obtain a WorkflowMeta without having to specify the inner types */ 
-  def workflow [W <: Workflow[_]]: Any = macro workflow_impl[W]
+  def workflow [W <: Workflow[_, _]]: Any = macro workflow_impl[W]
 
-  def workflow_impl [W <: Workflow[_] : c.WeakTypeTag] (c: Context) = {
+  def workflow_impl [W <: Workflow[_, _] : c.WeakTypeTag] (c: Context) = {
     import c.universe._
     val w = weakTypeOf[W]
     val t = w.members.find(_.name.toString == "flow").get.asMethod.returnType.asInstanceOf[TypeRefApi].args.head
@@ -88,9 +99,9 @@ package object amazonswf extends System {
   }
 
   /** Produce a WorkflowMetaBuilder without having to specify the inner types */
-  def workflowMeta [W <: Workflow[_]]: Any = macro workflowMeta_impl[W]
+  def workflowMeta [W <: Workflow[_, _]]: Any = macro workflowMeta_impl[W]
 
-  def workflowMeta_impl [W <: Workflow[_] : c.WeakTypeTag] (c: Context) = {
+  def workflowMeta_impl [W <: Workflow[_, _] : c.WeakTypeTag] (c: Context) = {
     import c.universe._
     val w = weakTypeOf[W]
     val t = w.members.find(_.name.toString == "flow").get.asMethod.returnType.asInstanceOf[TypeRefApi].args.head
@@ -101,10 +112,10 @@ package object amazonswf extends System {
 
   def complete [T] (res: T) = CompleteWorkflow(res)
 
-  implicit def toStep1 [T,A<:Activity[_,T]](activity: A with Activity[_,T])(implicit meta: SwfActivityMeta[T, A with Activity[_,T]]): Step1[T] = 
+  implicit def toStep1 [T,A<:Activity[_,T]](activity: A with Activity[_,T])(implicit meta: SwfActivityMeta[T, A with Activity[_,T]]): Step1[T] =
     new Step1(new ActivityStep(activity)(meta))
 
-  implicit def toStepList [T,A<:Activity[_,T]](activities: List[A with Activity[_,T]])(implicit meta: SwfActivityMeta[T, A with Activity[_,T]]): List[Step1[T]] = 
+  implicit def toStepList [T,A<:Activity[_,T]](activities: List[A with Activity[_,T]])(implicit meta: SwfActivityMeta[T, A with Activity[_,T]]): List[Step1[T]] =
     activities.map(a => toStep1(a)(meta))
  
 }

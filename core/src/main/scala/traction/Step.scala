@@ -1,9 +1,6 @@
 package com.gravitydev.traction
 
-import scalaz._, syntax.validation._, syntax.applicative._
-import com.typesafe.scalalogging.slf4j.StrictLogging
-import scala.reflect.api.TypeTags
-import scala.reflect.runtime.universe._
+import com.typesafe.scalalogging._
 
 sealed trait Decision
 object Decision {
@@ -23,7 +20,7 @@ trait System {
   /** Metadata about an activity. Implementation specific. */
   type ActivityMeta[A <: Activity[_,_]]
   /** Metadata about an workflow. Implementation specific. */
-  type WorkflowMeta[T, W <: Workflow[T]]
+  type WorkflowMeta[T, W <: Workflow[_, T]]
  
   /** Workflow decisions */
   type Schedule <: Decision.Schedule
@@ -31,8 +28,8 @@ trait System {
   type Fail     <: Decision.Fail
   type Complete[T] <: Decision.Complete[T]
 
-  abstract class Workflow[T] {
-    def flow: Step[T]
+  abstract class Workflow[C, T] {
+    def flow(context: C): Step[T]
   }
 
   def carryOn: CarryOn
@@ -70,7 +67,7 @@ trait System {
       step.decide(
         state, 
         result => {
-          logger.info("Result: " + result) 
+          logger.debug(s"Mapped step [$step] produced result [$result].")
           onSuccess(fn(result))
         },
         error => onFailure(error)
@@ -82,8 +79,9 @@ trait System {
       first.decide(
         history,
         res => {
-          next(res)
-            .decide(history, onSuccess, onFailure)
+          val nextStep = next(res)
+          logger.debug(s"Sequence step [$first] produced result [$res] and will proceed to step [$nextStep].")
+          nextStep.decide(history, onSuccess, onFailure)
         },
         onFailure
       )
@@ -106,7 +104,7 @@ trait System {
 
       (res1, res2) match {
         case (a: Decision.Schedule, b: Decision.Schedule) => {
-          logger.info("Scheduling parallel" + a + " and " + b) 
+          logger.debug("Scheduling parallel" + a + " and " + b)
           combineSchedules(a.asInstanceOf[Schedule], b.asInstanceOf[Schedule])
         }
         case (a: Decision.Schedule, _) => a.asInstanceOf[Schedule]
@@ -117,7 +115,7 @@ trait System {
 
         // TODO: handle failure
         case x => {
-          logger.info("Unexpected status: " + x)
+          logger.warn("Unexpected status: " + x)
           ???
         }
       }
@@ -125,7 +123,7 @@ trait System {
   }
 
   class ParallelListSteps [A] (steps: List[Step[A]]) extends Step[List[A]] {
-    def decide (history: WorkflowHistory, onSuccess: List[A] => Decision, onFailure: String => Decision) = {
+    def decide (history: WorkflowHistory, onSuccess: List[A] => Decision, onFailure: String => Decision): Decision = {
       val decisions = steps map {s =>
         s.decide(history, res => complete(res), onFailure)
       }
@@ -138,30 +136,55 @@ trait System {
         case (a: Decision.CarryOn) => a.asInstanceOf[CarryOn]
       }
 
-      (schedules, waiting) match {
-        case (head :: tail, _) => (head /: tail)(combineSchedules)
-        case (_, head :: tail) => carryOn
-        case (_, _) =>  
-          (complete( List.empty[A] ) /: decisions) {(a,b) =>
-            b match {
-              case x : Decision.Complete[_] => complete(a.result.asInstanceOf[List[A]] ++ List(x.result.asInstanceOf[A]))
+      val failed = decisions collect {
+        case (a: Decision.Fail) => a.asInstanceOf[Fail]
+      }
 
-              // TODO: handle failure
+      try {
+        val result: Decision = (schedules, waiting, failed) match {
+          case (_, _, fail :: s) => fail
+          case (head :: tail, _, _) => (head /: tail)(combineSchedules)
+          case (_, head :: tail, _) => carryOn
+          case (_, _, _) => {
+            (complete(List.empty[A]) /: decisions) { (a, decision) =>
+              decision match {
+                case decision: Decision.Complete[_] => {
+                  complete(a.result.asInstanceOf[List[A]] ++ List(decision.result.asInstanceOf[A]))
+                }
+                case _ => {
+                  logger.warn(s"Unexpected status [$decision] in decisions.")
+                  throw UnexpectedDecisionException(s"Unexpected status [$decision] in decisions.", decision)
+                }
+              }
+            } match {
+              case x: Decision.Complete[_] => onSuccess(x.result.asInstanceOf[List[A]])
               case x => {
-                logger.info("Unexpected status: " + x)
-                ???
+                logger.warn(s"Unexpected status [$x] in decisions.")
+                throw UnexpectedDecisionException(s"Unexpected status [$x] in decisions.", x)
               }
             }
-          } match {
-            case x: Decision.Complete[_] => onSuccess(x.result.asInstanceOf[List[A]])
-            case x => {
-              logger.info("Unexpected status: " + x)
-              ???
-            }
           }
+        }
+        result
+      }
+      catch {
+        case UnexpectedDecisionException(message, decision) => onFailure("Unexpected state encountered.")
       }
     }
+
+    case class UnexpectedDecisionException(message: String, decision: Decision) extends Exception(message)
   }
+
+  /**
+   * Step that always returns the supplied decision.
+   * @param decision the decision to return.
+   * @tparam T the type of result expected to be passed to this step.
+   */
+  case class DecidedStep[T](decision: Decision) extends Step[T] {
+    override def decide(state: WorkflowHistory,onSuccess: T => Decision,onFailure: String => Decision): Decision = decision
+  }
+
+
 
 }
 
